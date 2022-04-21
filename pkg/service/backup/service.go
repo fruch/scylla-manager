@@ -27,6 +27,7 @@ import (
 	"github.com/scylladb/scylla-manager/v3/pkg/util/timeutc"
 	"github.com/scylladb/scylla-manager/v3/pkg/util/uuid"
 	"go.uber.org/atomic"
+	"go.uber.org/multierr"
 )
 
 const defaultRateLimit = 100 // 100MiB
@@ -1067,8 +1068,14 @@ func (s *Service) DeleteSnapshot(ctx context.Context, clusterID uuid.UUID, locat
 		return errors.Wrap(err, "resolve hosts")
 	}
 
-	deletedManifests := atomic.NewInt32(0)
-	if err := hostsInParallel(hosts, parallel.NoLimit, func(h hostInfo) error {
+	var (
+		purgeErr error
+		wg       sync.WaitGroup
+
+		deletedManifests = atomic.NewInt32(0)
+	)
+
+	if err := hostsInParallel(hosts, s.config.ManifestLoadParallelism, func(h hostInfo) error {
 		s.logger.Info(ctx, "Purging snapshot data on host", "host", h.IP)
 
 		manifests, err := listManifests(ctx, client, h.IP, h.Location, clusterID)
@@ -1076,17 +1083,34 @@ func (s *Service) DeleteSnapshot(ctx context.Context, clusterID uuid.UUID, locat
 			return err
 		}
 		p := newPurger(client, h.IP, s.logger)
-		n, err := p.PurgeSnapshotTags(ctx, manifests, strset.New(snapshotTags...))
-		deletedManifests.Add(int32(n))
 
+		files, err := p.CollectPurgeableFiles(ctx, manifests, strset.New(snapshotTags...))
 		if err != nil {
-			s.logger.Error(ctx, "Purging snapshot data failed on host", "host", h.IP, "error", err)
-		} else {
-			s.logger.Info(ctx, "Done purging snapshot data on host", "host", h.IP)
+			return err
 		}
+
+		wg.Add(1)
+		go func() {
+			n, err := p.PurgeFiles(ctx, manifests, strset.New(snapshotTags...), files)
+			deletedManifests.Add(int32(n))
+			if err != nil {
+				s.logger.Error(ctx, "Purging snapshot data failed on host", "host", h.IP, "error", err)
+			} else {
+				s.logger.Info(ctx, "Done purging snapshot data on host", "host", h.IP)
+			}
+			purgeErr = multierr.Append(purgeErr, err)
+
+			wg.Done()
+		}()
+
 		return err
 	}); err != nil {
 		return err
+	}
+
+	wg.Wait()
+	if purgeErr != nil {
+		return purgeErr
 	}
 
 	if deletedManifests.Load() == 0 {

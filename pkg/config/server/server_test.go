@@ -76,6 +76,7 @@ func TestConfigModification(t *testing.T) {
 		Backup: backup.Config{
 			DiskSpaceFreeMinPercent:   1,
 			LongPollingTimeoutSeconds: 5,
+			ManifestLoadParallelism:   1,
 			AgeMax:                    12 * time.Hour,
 		},
 		Repair: repair.Config{

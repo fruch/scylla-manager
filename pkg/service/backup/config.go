@@ -14,6 +14,7 @@ import (
 type Config struct {
 	DiskSpaceFreeMinPercent   int           `yaml:"disk_space_free_min_percent"`
 	LongPollingTimeoutSeconds int           `yaml:"long_polling_timeout_seconds"`
+	ManifestLoadParallelism   int           `yaml:"manifest_load_parallelism"`
 	AgeMax                    time.Duration `yaml:"age_max"`
 }
 
@@ -21,6 +22,7 @@ func DefaultConfig() Config {
 	return Config{
 		DiskSpaceFreeMinPercent:   10,
 		LongPollingTimeoutSeconds: 10,
+		ManifestLoadParallelism:   1,
 		AgeMax:                    12 * time.Hour,
 	}
 }
@@ -36,6 +38,9 @@ func (c *Config) Validate() error {
 	}
 	if c.AgeMax < 0 {
 		err = multierr.Append(err, errors.New("invalid age_max, must be >= 0"))
+	}
+	if c.ManifestLoadParallelism < 0 {
+		err = multierr.Append(err, errors.New("invalid manifest_load_parallelism, must be >= 0"))
 	}
 
 	return err
